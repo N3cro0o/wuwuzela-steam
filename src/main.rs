@@ -86,7 +86,7 @@ fn handle_input(output: &str, options: &mut FetcherOptions) -> Result<i32, Box<d
             get_input(&mut count_str)?;
             let count = count_str.trim().parse::<u32>()?;
             let mut cursor = None;
-            for i in 0..count {
+            for _ in 0..count {
                 let response = get_reviews(id, cursor, options.clone())?;
                 if !response.status().is_success() {
                     eprintln!("We fucked up");
@@ -169,11 +169,13 @@ fn prepare_url(game_id: usize, cursor: Option<String>, options: FetcherOptions) 
     let url;
     if let Some(s) = cursor {
         url = reqwest::Url::parse_with_params(REVIEW_ADDRESS,
-            &[(REVIEW_ID, game_id.to_string()), (REVIEW_COUNT, options.reviews_per_page.to_string()), ("cursor", s)]);
+            &[(REVIEW_ID, game_id.to_string()), (REVIEW_COUNT, options.reviews_per_page.to_string()),
+            ("cursor", s), (REVIEW_DAY_RANGE, options.day_range.to_string())]);
     }
     else {
         url = reqwest::Url::parse_with_params(REVIEW_ADDRESS,
-            &[(REVIEW_ID, game_id.to_string()), (REVIEW_COUNT, options.reviews_per_page.to_string())]);
+            &[(REVIEW_ID, game_id.to_string()), (REVIEW_COUNT, options.reviews_per_page.to_string()),
+            ("cursor", "*".to_string()), (REVIEW_DAY_RANGE, options.day_range.to_string())]);
     }
     url.unwrap()
 }
@@ -212,7 +214,7 @@ fn init() -> Result<FetcherOptions, Box<dyn Error>> {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mut options = init()?;
+    let options = init()?;
     main_loop(options)?;
     Ok(())
 }
