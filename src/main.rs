@@ -12,7 +12,7 @@ mod steam;
 const REVIEW_ADDRESS: &str = "https://api.steampowered.com/IUserReviewsService/GetAppReviews/v1";
 const REVIEW_ID: &str = "appid";
 const REVIEW_DAY_RANGE: &str = "day_range";
-const REVIEW_COUNT: &str = "num_per_page=";
+const REVIEW_COUNT: &str = "num_per_page";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct FetcherOptions {
@@ -92,9 +92,10 @@ fn handle_input(output: &str, options: &mut FetcherOptions) -> Result<i32, Box<d
                     eprintln!("We fucked up");
                     return Ok(0);
                 }
-                let body = response.text()?;
+                let mut body = response.text()?;
                 let response_struct: steam::Review = serde_json::from_str(&body)?;
                 cursor = Some(response_struct.get_cursor());
+                body = body + "\n";
                 file.write_all(body.as_bytes())?;
             }
             Ok(0)
