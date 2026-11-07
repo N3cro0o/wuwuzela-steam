@@ -1,5 +1,4 @@
-use serde::{Serialize, Deserialize};
-
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Review {
@@ -18,7 +17,7 @@ pub struct ReviewMessage {
     reviews: Vec<ReviewBody>,
     cursor: String,
     day_range_used: usize,
-    total_matching: usize
+    total_matching: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,7 +27,7 @@ pub struct ReviewSummary {
     review_score_desc: Option<String>,
     total_positive: Option<usize>,
     total_negative: Option<usize>,
-    total_reviews: Option<usize>
+    total_reviews: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -55,7 +54,6 @@ pub struct ReviewBody {
     primary_steam_deck: Option<bool>,
     refunded: bool,
     hardware: Option<Hardware>,
-
 }
 
 #[derive(Debug, Serialize, Deserialize)]
