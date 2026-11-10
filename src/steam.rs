@@ -9,6 +9,21 @@ impl Review {
     pub fn get_cursor(&self) -> String {
         self.response.cursor.clone()
     }
+    /// Zwraca liczbę recenzji otrzymanych na tej stronie.
+    pub fn get_review_count(&self) -> usize {
+        self.response.reviews.len()
+    }
+
+    /// Usuwa recenzje bez treści i zwraca ich liczbę.
+    pub fn remove_empty_reviews(&mut self) -> usize {
+        let review_count_before = self.response.reviews.len();
+
+        self.response
+            .reviews
+            .retain(|review| !review.review.trim().is_empty());
+
+        review_count_before - self.response.reviews.len()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -62,7 +77,7 @@ pub struct Author {
     num_reviews: usize,
     playtime_forever: usize,
     playtime_last_two_weeks: usize,
-    playtime_at_review: usize,
+    playtime_at_review: Option<usize>, // Steam może pominąć to pole, dlatego czas gry może być niedostępny.
     deck_playime_at_review: Option<usize>,
     last_played: usize,
 }

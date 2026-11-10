@@ -92,14 +92,23 @@ fn handle_input(output: &str, options: &mut FetcherOptions) -> Result<i32, Box<d
             let id = get_steam_game_id()?;
             let response = get_reviews(id, None, options.clone())?;
             if !response.status().is_success() {
-                eprintln!("We fucked up");
+                eprintln!("We fucked up. HTTP error code: {}", response.status().as_u16());
                 return Ok(0);
             }
             let body = response.text()?;
+            let mut response_struct: steam::Review = serde_json::from_str(&body)?;
+            let page_review_count = response_struct.get_review_count();
+            let empty_review_count = response_struct.remove_empty_reviews();
+            let saved_review_count = page_review_count - empty_review_count;
+            let cleaned_body = serde_json::to_string(&response_struct)?;
+
             let (path, mut file) = create_file(id)?;
-            file.write_all(body.as_bytes())?;
+            file.write_all(cleaned_body.as_bytes())?;
             drop(file);
             clean_review_file(&path, options)?;
+            println!(
+                "Zapisano {saved_review_count} recenzji, pominięto {empty_review_count} pustych."
+            );
             Ok(0)
         }
 
@@ -110,18 +119,61 @@ fn handle_input(output: &str, options: &mut FetcherOptions) -> Result<i32, Box<d
             let mut count_str = String::new();
             get_input(&mut count_str)?;
             let count = count_str.trim().parse::<u32>()?;
+
+            // Przechowuje kursor wskazujący stronę, którą pobierzemy jako następną.
             let mut cursor = None;
-            for _ in 0..count {
+
+            // Zlicza wszystkie recenzje pobrane ze wszystkich stron.
+            let mut total_reviews = 0;
+
+            // Pobiera strony po kolei; numerowanie stron zaczyna się od 1.
+            for page_number in 1..=count {
+                // Pobiera stronę recenzji wskazaną przez aktualny kursor.
                 let response = get_reviews(id, cursor, options.clone())?;
+
+                // Kończy pobieranie, gdy serwer zwróci odpowiedź HTTP z błędem.
                 if !response.status().is_success() {
-                    eprintln!("We fucked up");
+                    eprintln!("We fucked up. HTTP error code: {}", response.status().as_u16());
                     return Ok(0);
                 }
-                let mut body = response.text()?;
-                let response_struct: steam::Review = serde_json::from_str(&body)?;
+
+                // Odczytuje treść odpowiedzi HTTP jako tekst JSON.
+                let body = response.text()?;
+
+                // Zamienia JSON na strukturę, z której odczytamy recenzje i kursor.
+                let mut response_struct: steam::Review = serde_json::from_str(&body)?;
+
+                // Sprawdza liczbę recenzji na pobranej stronie.
+                let page_review_count = response_struct.get_review_count();
+
+                // Pusta strona oznacza, że nie ma już recenzji do pobrania.
+                if page_review_count == 0 {
+                    println!("Strona {page_number} jest pusta. Kończę pobieranie.");
+                    break;
+                }
+
+                // Usuwa recenzje, które nie zawierają tekstu.
+                let empty_review_count = response_struct.remove_empty_reviews();
+
+                // Liczy recenzje, które zostaną zapisane po odrzuceniu pustych.
+                let saved_review_count = page_review_count - empty_review_count;
+
+                // Dodaje zapisane recenzje z tej strony do łącznej liczby.
+                total_reviews += saved_review_count;
+
+                // Zachowuje kursor potrzebny do pobrania następnej strony.
                 cursor = Some(response_struct.get_cursor());
-                body = body + "\n";
-                file.write_all(body.as_bytes())?;
+
+                // Zamienia oczyszczoną stronę z powrotem na tekst JSON.
+                let cleaned_body = serde_json::to_string(&response_struct)?;
+
+                // Zapisuje stronę bez pustych recenzji i dodaje nową linię.
+                file.write_all(format!("{cleaned_body}\n").as_bytes())?;
+
+                // Pokazuje zapisane recenzje oraz liczbę pominiętych pustych wpisów.
+                println!(
+                    "Strona {page_number}: zapisano {saved_review_count} recenzji, pominięto {empty_review_count} pustych. Łącznie zapisano: {total_reviews}."
+                );
             }
             drop(file);
             clean_review_file(&path, options)?;
@@ -137,7 +189,7 @@ fn handle_input(output: &str, options: &mut FetcherOptions) -> Result<i32, Box<d
             let id = 3191050;
             let response = get_reviews(id, None, options.clone())?;
             if !response.status().is_success() {
-                eprintln!("We fucked up");
+                eprintln!("We fucked up. HTTP error code: {}", response.status().as_u16());
                 return Ok(0);
             }
             println!("------------------------------------------------------");
@@ -148,7 +200,7 @@ fn handle_input(output: &str, options: &mut FetcherOptions) -> Result<i32, Box<d
             println!("------------------------------------------------------");
             let response = get_reviews(id, Some(response_struct.get_cursor()), options.clone())?;
             if !response.status().is_success() {
-                eprintln!("We fucked up");
+                eprintln!("We fucked up. HTTP error code: {}", response.status().as_u16());
                 return Ok(0);
             }
             let body = response.text()?;
