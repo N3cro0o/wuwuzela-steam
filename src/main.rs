@@ -84,6 +84,126 @@ fn get_input(output: &mut String) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Pobiera podaną liczbę stron recenzji i zapisuje je do pliku w folderze data.
+fn download_pages(id: usize, count: u32, options: &FetcherOptions) -> Result<(), Box<dyn Error>> {
+    use std::io::Write;
+
+    // Tworzy plik, do którego zapiszemy pobrane strony.
+    let (path, mut file) = create_file(id)?;
+
+    // Kursor mówi Steamowi, którą stronę pobrać następną.
+    let mut cursor = None;
+
+    // Zlicza wszystkie zapisane recenzje.
+    let mut total_reviews = 0;
+
+    for page_number in 1..=count {
+        let response = get_reviews(id, cursor, options.clone())?;
+
+        // Przy błędzie HTTP pokazujemy kod i kończymy pobieranie.
+        if !response.status().is_success() {
+            eprintln!("We fucked up. HTTP error code: {}", response.status().as_u16());
+            return Ok(());
+        }
+
+        let body = response.text()?;
+        let mut response_struct: steam::Review = serde_json::from_str(&body)?;
+        let page_review_count = response_struct.get_review_count();
+
+        // Pusta strona oznacza, że nie ma już recenzji.
+        if page_review_count == 0 {
+            println!("Strona {page_number} jest pusta. Kończę pobieranie.");
+            break;
+        }
+
+        // Pomija recenzje bez tekstu i liczy, ile zapisujemy.
+        let empty_review_count = response_struct.remove_empty_reviews();
+        let saved_review_count = page_review_count - empty_review_count;
+        total_reviews += saved_review_count;
+
+        cursor = Some(response_struct.get_cursor());
+
+        // Zapisuje oczyszczoną stronę jako jedną linię pliku.
+        let cleaned_body = serde_json::to_string(&response_struct)?;
+        file.write_all(format!("{cleaned_body}\n").as_bytes())?;
+
+        println!(
+            "Strona {page_number}: zapisano {saved_review_count} recenzji, pominięto {empty_review_count} pustych. Łącznie zapisano: {total_reviews}."
+        );
+    }
+
+    // Zamyka plik przed dodatkowym czyszczeniem.
+    drop(file);
+    clean_review_file(&path, options)?;
+    Ok(())
+}
+
+/// Tryb CLI: steam-fetcher [app_id] [ile stron]
+fn run_cli(args: &[String], options: &FetcherOptions) -> Result<(), Box<dyn Error>> {
+    // Potrzebujemy dokładnie 2 argumentów (plus nazwa programu na początku).
+    if args.len() != 3 {
+        eprintln!("Użycie: steam-fetcher [app_id] [ile stron]");
+        return Ok(());
+    }
+
+    // args[0] to nazwa programu, args[1] to app_id, args[2] to liczba stron.
+    let id = match args[1].parse::<usize>() {
+        Ok(number) => number,
+        Err(_) => {
+            eprintln!("app_id musi być liczbą, a dostałem: {}", args[1]);
+            return Ok(());
+        }
+    };
+
+    let count = match args[2].parse::<u32>() {
+        Ok(number) => number,
+        Err(_) => {
+            eprintln!("Liczba stron musi być liczbą, a dostałem: {}", args[2]);
+            return Ok(());
+        }
+    };
+
+    // Używamy tej samej funkcji co opcja 2 w menu.
+    download_pages(id, count, options)
+}
+
+// Pobiera dwie strony recenzji i wypisuje je w terminalu.
+fn test_reviews(id: usize, options: &FetcherOptions) -> Result<(), Box<dyn Error>> {
+    // Pobiera pierwszą stronę.
+    let response = get_reviews(id, None, options.clone())?;
+
+    if !response.status().is_success() {
+        eprintln!("We fucked up. HTTP error code: {}", response.status().as_u16());
+        return Ok(());
+    }
+
+    println!("------------------------------------------------------");
+    let body = response.text()?;
+    println!("{body}");
+
+    // Odczytuje kursor potrzebny do pobrania drugiej strony.
+    let response_struct: steam::Review = serde_json::from_str(&body)?;
+    println!("{:?}", response_struct);
+    println!("------------------------------------------------------");
+
+    // Pobiera drugą stronę, używając kursora z pierwszej.
+    let response = get_reviews(id, Some(response_struct.get_cursor()), options.clone())?;
+
+    if !response.status().is_success() {
+        eprintln!("We fucked up. HTTP error code: {}", response.status().as_u16());
+        return Ok(());
+    }
+
+    let body = response.text()?;
+    println!("{body}");
+
+    let response_struct: steam::Review = serde_json::from_str(&body)?;
+    println!("{:?}", response_struct);
+    println!("------------------------------------------------------");
+
+    Ok(())
+}
+
 fn handle_input(output: &str, options: &mut FetcherOptions) -> Result<i32, Box<dyn Error>> {
     use std::io::Write;
     let output_i32: i32 = output.trim().parse::<i32>()?;
@@ -114,69 +234,13 @@ fn handle_input(output: &str, options: &mut FetcherOptions) -> Result<i32, Box<d
 
         2 => {
             let id = get_steam_game_id()?;
-            let (path, mut file) = create_file(id)?;
             println!("How many pages do you need laddie?");
             let mut count_str = String::new();
             get_input(&mut count_str)?;
             let count = count_str.trim().parse::<u32>()?;
 
-            // Przechowuje kursor wskazujący stronę, którą pobierzemy jako następną.
-            let mut cursor = None;
-
-            // Zlicza wszystkie recenzje pobrane ze wszystkich stron.
-            let mut total_reviews = 0;
-
-            // Pobiera strony po kolei; numerowanie stron zaczyna się od 1.
-            for page_number in 1..=count {
-                // Pobiera stronę recenzji wskazaną przez aktualny kursor.
-                let response = get_reviews(id, cursor, options.clone())?;
-
-                // Kończy pobieranie, gdy serwer zwróci odpowiedź HTTP z błędem.
-                if !response.status().is_success() {
-                    eprintln!("We fucked up. HTTP error code: {}", response.status().as_u16());
-                    return Ok(0);
-                }
-
-                // Odczytuje treść odpowiedzi HTTP jako tekst JSON.
-                let body = response.text()?;
-
-                // Zamienia JSON na strukturę, z której odczytamy recenzje i kursor.
-                let mut response_struct: steam::Review = serde_json::from_str(&body)?;
-
-                // Sprawdza liczbę recenzji na pobranej stronie.
-                let page_review_count = response_struct.get_review_count();
-
-                // Pusta strona oznacza, że nie ma już recenzji do pobrania.
-                if page_review_count == 0 {
-                    println!("Strona {page_number} jest pusta. Kończę pobieranie.");
-                    break;
-                }
-
-                // Usuwa recenzje, które nie zawierają tekstu.
-                let empty_review_count = response_struct.remove_empty_reviews();
-
-                // Liczy recenzje, które zostaną zapisane po odrzuceniu pustych.
-                let saved_review_count = page_review_count - empty_review_count;
-
-                // Dodaje zapisane recenzje z tej strony do łącznej liczby.
-                total_reviews += saved_review_count;
-
-                // Zachowuje kursor potrzebny do pobrania następnej strony.
-                cursor = Some(response_struct.get_cursor());
-
-                // Zamienia oczyszczoną stronę z powrotem na tekst JSON.
-                let cleaned_body = serde_json::to_string(&response_struct)?;
-
-                // Zapisuje stronę bez pustych recenzji i dodaje nową linię.
-                file.write_all(format!("{cleaned_body}\n").as_bytes())?;
-
-                // Pokazuje zapisane recenzje oraz liczbę pominiętych pustych wpisów.
-                println!(
-                    "Strona {page_number}: zapisano {saved_review_count} recenzji, pominięto {empty_review_count} pustych. Łącznie zapisano: {total_reviews}."
-                );
-            }
-            drop(file);
-            clean_review_file(&path, options)?;
+            // Całe pobieranie jest w osobnej funkcji, z której skorzysta też tryb CLI.
+            download_pages(id, count, options)?;
             Ok(0)
         }
 
@@ -186,28 +250,9 @@ fn handle_input(output: &str, options: &mut FetcherOptions) -> Result<i32, Box<d
         }
 
         10 => {
+            // Opcja 10 nadal testuje tę samą grę co wcześniej.
             let id = 3191050;
-            let response = get_reviews(id, None, options.clone())?;
-            if !response.status().is_success() {
-                eprintln!("We fucked up. HTTP error code: {}", response.status().as_u16());
-                return Ok(0);
-            }
-            println!("------------------------------------------------------");
-            let body = response.text()?;
-            println!("{body}");
-            let response_struct: steam::Review = serde_json::from_str(&body)?;
-            println!("{:?}", response_struct);
-            println!("------------------------------------------------------");
-            let response = get_reviews(id, Some(response_struct.get_cursor()), options.clone())?;
-            if !response.status().is_success() {
-                eprintln!("We fucked up. HTTP error code: {}", response.status().as_u16());
-                return Ok(0);
-            }
-            let body = response.text()?;
-            println!("{body}");
-            let response_struct: steam::Review = serde_json::from_str(&body)?;
-            println!("{:?}", response_struct);
-            println!("------------------------------------------------------");
+            test_reviews(id, options)?;
             Ok(0)
         }
 
@@ -604,7 +649,19 @@ fn init() -> Result<FetcherOptions, Box<dyn Error>> {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // Wczytuje ustawienia, tak jak wcześniej.
     let options = init()?;
-    main_loop(options)?;
+
+    // Zbiera nazwę programu i argumenty wpisane w terminalu.
+    let args: Vec<String> = std::env::args().collect();
+
+    if args.len() > 1 {
+        // Są argumenty: uruchamiamy tryb CLI.
+        run_cli(&args, &options)?;
+    } else {
+        // Nie ma argumentów: uruchamiamy dotychczasowe menu.
+        main_loop(options)?;
+    }
+
     Ok(())
 }
